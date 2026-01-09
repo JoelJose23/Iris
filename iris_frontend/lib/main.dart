@@ -1,9 +1,24 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
+import 'package:window_manager/window_manager.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await windowManager.ensureInitialized();
+
+  WindowOptions windowOptions = const WindowOptions(
+    titleBarStyle: TitleBarStyle.hidden, // 👈 kills top bar
+    windowButtonVisibility: false,       // 👈 no close/min/max
+  );
+
+  windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    await windowManager.focus();
+  });
+
   runApp(const IrisApp());
 }
+
 
 class IrisApp extends StatelessWidget {
   const IrisApp({super.key});
@@ -33,7 +48,7 @@ class Glass extends StatelessWidget {
     super.key,
     required this.child,
     this.blur = 20,
-    this.opacity = 46,
+    this.opacity = 0.2,
     this.borderRadius = const BorderRadius.all(Radius.circular(16)),
   });
 
@@ -45,10 +60,10 @@ class Glass extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
         child: Container(
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: opacity),
+            color: Colors.white.withOpacity(opacity),
             borderRadius: borderRadius,
             border: Border.all(
-              color: Colors.white.withValues(alpha: 56),
+              color: Colors.white.withOpacity(0.3),
             ),
           ),
           child: child,
@@ -140,26 +155,29 @@ class _ChatScreenState extends State<ChatScreen>
           children: [
             IconButton(
               icon: Icon(
-                isSidebarCollapsed
-                    ? Icons.chevron_right
-                    : Icons.chevron_left,
+                isSidebarCollapsed ? Icons.chevron_right : Icons.chevron_left,
               ),
               onPressed: toggleSidebar,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
             ),
             if (!isSidebarCollapsed)
-              const Expanded(
+              Expanded(
                 child: Text(
                   'Chats',
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             if (!isSidebarCollapsed)
               IconButton(
                 icon: const Icon(Icons.add),
                 onPressed: addConversation,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
               ),
           ],
         ),
@@ -173,31 +191,47 @@ class _ChatScreenState extends State<ChatScreen>
           itemCount: conversations.length,
           itemBuilder: (context, index) {
             final isSelected = index == selectedConversation;
+            final conversationName = conversations[index];
 
-            return ListTile(
-              dense: true,
-              tileColor: isSelected
-                  ? const Color(0xFF1A1D23)
-                  : Colors.transparent,
-              leading: const Icon(Icons.chat_bubble_outline, size: 18),
-              title: isSidebarCollapsed
-                  ? null
-                  : Text(
-                      conversations[index],
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-              trailing: !isSidebarCollapsed
-                  ? IconButton(
-                      icon: const Icon(Icons.delete, size: 16),
-                      onPressed: () => deleteConversation(index),
-                    )
-                  : null,
+            return GestureDetector(
               onTap: () {
                 setState(() {
                   selectedConversation = index;
                 });
               },
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? const Color(0xFF1A1D23)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.chat_bubble_outline, size: 18),
+                    if (!isSidebarCollapsed)
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: Text(
+                            conversationName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    if (!isSidebarCollapsed)
+                      IconButton(
+                        icon: const Icon(Icons.delete, size: 16),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () => deleteConversation(index),
+                      ),
+                  ],
+                ),
+              ),
             );
           },
         ),
@@ -205,6 +239,7 @@ class _ChatScreenState extends State<ChatScreen>
     ],
   );
 }
+
 
   List<_Message> get currentMessages {
   if (conversationMessages.isEmpty) return [];
@@ -236,7 +271,7 @@ class _ChatScreenState extends State<ChatScreen>
           // ---------- DARK OVERLAY (READABILITY) ----------
           Positioned.fill(
             child: Container(
-              color: Colors.black.withValues(alpha:46 ),
+              color: Colors.black.withOpacity(0.5),
             ),
           ),
 
@@ -247,7 +282,7 @@ class _ChatScreenState extends State<ChatScreen>
                 // Sidebar
                 AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
-                    width: isSidebarCollapsed ? 60 : 260,
+                    width: isSidebarCollapsed ? 84 : 260,
                     child: Padding(
                       padding: const EdgeInsets.all(12),
                       child: Glass(
