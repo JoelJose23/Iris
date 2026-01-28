@@ -124,11 +124,8 @@ class ChatMessage {
 
 class _ChatScreenState extends State<ChatScreen>
     with SingleTickerProviderStateMixin {
-  final Map<String, List<ChatMessage>> conversationMessages = {
-    'Chat with Alice': [],
-    'Project IRIS': [],
-    'Random Thoughts': [],
-  };
+  final Map<String, List<ChatMessage>> conversationMessages = {};
+  List<String> conversationOrder = [];
 
   final List<String> _charQueue = [];
   Timer? _typingTimer;
@@ -142,7 +139,13 @@ class _ChatScreenState extends State<ChatScreen>
   bool isSidebarCollapsed = false;
   int selectedConversation = 0;
 
-  List<String> get conversations => conversationMessages.keys.toList();
+  List<String> get conversations => conversationOrder;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadConversations();
+  }
 
   void sendMessage() {
     final text = controller.text.trim();
@@ -167,7 +170,15 @@ class _ChatScreenState extends State<ChatScreen>
 
     _isStreaming = true;
 
-    IrisApi.streamMessage(text).listen(
+    IrisApi.streamMessage(prompt: text,
+  conversation: selectedConversation,
+  context: "default",
+  messages: conversationMessages[conversationKey]!
+      .map((m) => {
+            "role": m.isUser ? "user" : "assistant",
+            "content": m.text,
+          })
+      .toList(),).listen(
       (chunk) {
         for (int i = 0; i < chunk.length; i++) {
           _charQueue.add(chunk[i]);
@@ -198,6 +209,26 @@ class _ChatScreenState extends State<ChatScreen>
     });
   }
 
+  Future<void> _loadConversations() async {
+  final result = await IrisApi.fetchConversations();
+
+  if (result.isEmpty) {
+    _createInitialConversation();
+    return;
+  }
+
+  setState(() {
+    conversationOrder.clear();
+    conversationMessages.clear();
+
+    for (final conv in result) {
+      conversationOrder.add(conv.title);
+      conversationMessages[conv.title] = [];
+    }
+  });
+  }
+
+
   void _startTyping(ChatMessage assistantMessage) {
   _isTyping = true;
 
@@ -226,6 +257,40 @@ class _ChatScreenState extends State<ChatScreen>
   );
 }
 
+  void _createInitialConversation() {
+  const title = "Conversation 1";
+
+  setState(() {
+    conversationOrder.add(title);
+    conversationMessages[title] = [
+      ChatMessage(
+        "Hi, I’m Iris. What is it going to be today?",
+        isUser: false,
+      ),
+    ];
+    selectedConversation = 0;
+  });
+
+  IrisApi.createConversation(title);
+  }
+
+  void addConvo() {
+  final index = conversationOrder.length + 1;
+  final title = "Conversation $index";
+
+  setState(() {
+    conversationOrder.add(title);
+    conversationMessages[title] = [
+      ChatMessage(
+        "Hi, I’m Iris. What is it going to be today?",
+        isUser: false,
+      ),
+    ];
+    selectedConversation = conversationOrder.length - 1;
+  });
+
+  IrisApi.createConversation(title);
+}
 
 
   void deleteConversation(int index) {
@@ -420,6 +485,7 @@ class _ChatScreenState extends State<ChatScreen>
                       _InputBar(
                         controller: controller,
                         onSend: sendMessage,
+                        locked: _isStreaming,
                       ),
                     ],
                   ),
@@ -486,12 +552,14 @@ class _Header extends StatelessWidget {
 
 
 class _InputBar extends StatelessWidget {
+  final bool locked;
   final TextEditingController controller;
   final VoidCallback onSend;
 
   const _InputBar({
     required this.controller,
     required this.onSend,
+    required this.locked,
   });
 
   @override
@@ -504,6 +572,7 @@ class _InputBar extends StatelessWidget {
           children: [
             Expanded(
               child: TextField(
+                enabled: !locked,
                 controller: controller,
                 onSubmitted: (_) => onSend(),
                 decoration: const InputDecoration(
@@ -516,7 +585,7 @@ class _InputBar extends StatelessWidget {
             ),
             IconButton(
               icon: const Icon(Icons.send),
-              onPressed: onSend,
+              onPressed: locked ? null : onSend,
             ),
           ],
         ),
