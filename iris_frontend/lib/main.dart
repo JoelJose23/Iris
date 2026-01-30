@@ -32,7 +32,7 @@ class IrisApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: Colors.transparent, // 👈 important
+        scaffoldBackgroundColor: const Color.fromARGB(255, 5, 5, 5), // 👈 important
         fontFamily: 'Roboto',
       ),
       home: const ChatScreen(),
@@ -62,7 +62,7 @@ class Glass extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
         child: Container(
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(opacity),
+            color: const Color.fromARGB(255, 243, 241, 241).withOpacity(opacity),
             borderRadius: borderRadius,
             border: Border.all(
               color: Colors.white.withOpacity(0.3),
@@ -116,16 +116,11 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class ChatMessage {
-  String text;
-  final bool isUser;
-  ChatMessage(this.text, {required this.isUser});
-}
-
 class _ChatScreenState extends State<ChatScreen>
     with SingleTickerProviderStateMixin {
-  final Map<String, List<ChatMessage>> conversationMessages = {};
-  List<String> conversationOrder = [];
+  final Map<int, List<ChatMessage>> conversationMessages = {};
+  List<ConversationMeta> conversationOrder = [];
+  int selectedConversationIndex = 0;
 
   final List<String> _charQueue = [];
   Timer? _typingTimer;
@@ -139,7 +134,8 @@ class _ChatScreenState extends State<ChatScreen>
   bool isSidebarCollapsed = false;
   int selectedConversation = 0;
 
-  List<String> get conversations => conversationOrder;
+  List<String> get conversations =>
+      conversationOrder.map((c) => c.title).toList();
 
   @override
   void initState() {
@@ -148,85 +144,93 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   void sendMessage() {
-    final text = controller.text.trim();
-    if (text.isEmpty) return;
+  final text = controller.text.trim();
+  if (text.isEmpty) return;
 
-    final conversationKey = conversations[selectedConversation];
+  final conv = conversationOrder[selectedConversationIndex];
+  final convId = conv.id;
 
-    setState(() {
-      // User message
-      conversationMessages[conversationKey]!
-          .add(ChatMessage(text, isUser: true));
+  setState(() {
+    // User message
+    conversationMessages[convId]!.add(ChatMessage(text, isUser: true));
+    // Assistant placeholder (will stream into this)
+    conversationMessages[convId]!.add(ChatMessage("", isUser: false));
+  });
 
-      // Assistant placeholder (empty, will stream into this)
-      conversationMessages[conversationKey]!
-          .add(ChatMessage("", isUser: false));
-    });
+  controller.clear();
+  final assistantMessage = conversationMessages[convId]!.last;
 
-    controller.clear();
+  _isStreaming = true;
 
-    final assistantMessage =
-        conversationMessages[conversationKey]!.last;
+  IrisApi.streamMessage(
+    prompt: text,
+    conversation: convId,
+    context: "default",
+    messages: conversationMessages[convId]!
+        .map((m) => {"role": m.isUser ? "user" : "assistant", "content": m.text})
+        .toList(),
+  ).listen(
+    (chunk) {
+      for (int i = 0; i < chunk.length; i++) {
+        _charQueue.add(chunk[i]);
+      }
 
-    _isStreaming = true;
+      if (!_isTyping) {
+        _startTyping(assistantMessage);
+      }
+    },
+    onDone: () {
+      _isStreaming = false;
+    },
+    onError: (e) {
+      _isStreaming = false;
+      setState(() {
+        assistantMessage.text += "\n\n⚠️ Error generating response.";
+      });
+    },
+  );
+}
 
-    IrisApi.streamMessage(prompt: text,
-  conversation: selectedConversation,
-  context: "default",
-  messages: conversationMessages[conversationKey]!
-      .map((m) => {
-            "role": m.isUser ? "user" : "assistant",
-            "content": m.text,
-          })
-      .toList(),).listen(
-      (chunk) {
-        for (int i = 0; i < chunk.length; i++) {
-          _charQueue.add(chunk[i]);
-        }
 
-        if (!_isTyping) {
-          _startTyping(assistantMessage);
-        }
-      },
-      onDone: () {
-        _isStreaming = false;
-      },
-      onError: (e) {
-        _isStreaming = false;
-        setState(() {
-          assistantMessage.text += "\n\n⚠️ Error generating response.";
-        });
-      },
-    );
-  }
+  void addConversation() async {
+  final newConversation = await IrisApi.createConversation("New Conversation");
 
-  void addConversation() {
-    final int newIndex = conversationMessages.length; 
-    final String newName = 'New Chat ${newIndex + 1}';
-    setState(() {
-      conversationMessages[newName] = [];
-      selectedConversation = newIndex;
-    });
-  }
+  setState(() {
+    conversationOrder.add(newConversation);
+    conversationMessages[newConversation.id] = [
+      ChatMessage(
+        "Hi, I’m Iris. What is it going to be today?",
+        isUser: false,
+      ),
+    ];
+    selectedConversationIndex = conversationOrder.length - 1;
+  });
+}
+
 
   Future<void> _loadConversations() async {
   final result = await IrisApi.fetchConversations();
 
   if (result.isEmpty) {
-    _createInitialConversation();
+    await _createInitialConversation();
     return;
   }
 
-  setState(() {
-    conversationOrder.clear();
-    conversationMessages.clear();
-
-    for (final conv in result) {
-      conversationOrder.add(conv.title);
-      conversationMessages[conv.title] = [];
-    }
-  });
+  final newConversationMessages = <int, List<ChatMessage>>{};
+  for (final conv in result) {
+    final messages = await IrisApi.getConversation(conv.id);
+    newConversationMessages[conv.id] =
+        messages.map((m) => ChatMessage(m.text, isUser: m.isUser)).toList();
   }
+
+  setState(() {
+    conversationOrder = result; // keeps IDs + titles from backend
+    conversationMessages.clear();
+    conversationMessages.addAll(newConversationMessages);
+    selectedConversationIndex = 0;
+  });
+}
+
 
 
   void _startTyping(ChatMessage assistantMessage) {
@@ -257,48 +261,38 @@ class _ChatScreenState extends State<ChatScreen>
   );
 }
 
-  void _createInitialConversation() {
-  const title = "Conversation 1";
+  Future<void> _createInitialConversation() async {
+    final newConversation =
+        await IrisApi.createConversation("New Conversation");
 
-  setState(() {
-    conversationOrder.add(title);
-    conversationMessages[title] = [
-      ChatMessage(
-        "Hi, I’m Iris. What is it going to be today?",
-        isUser: false,
-      ),
-    ];
-    selectedConversation = 0;
-  });
+    setState(() {
+      conversationOrder.add(newConversation);
 
-  IrisApi.createConversation(title);
+      // 🔑 Use backend ID, not title
+      conversationMessages[newConversation.id] = [
+        ChatMessage(
+          "Hi, I’m Iris. What is it going to be today?",
+          isUser: false,
+        ),
+      ];
+
+      selectedConversationIndex = 0;
+    });
   }
-
-  void addConvo() {
-  final index = conversationOrder.length + 1;
-  final title = "Conversation $index";
-
-  setState(() {
-    conversationOrder.add(title);
-    conversationMessages[title] = [
-      ChatMessage(
-        "Hi, I’m Iris. What is it going to be today?",
-        isUser: false,
-      ),
-    ];
-    selectedConversation = conversationOrder.length - 1;
-  });
-
-  IrisApi.createConversation(title);
-}
 
 
   void deleteConversation(int index) {
-    final key = conversations[index];
+    final convToDelete = conversationOrder[index];
+    IrisApi.deleteConversation(convToDelete.id);
+
     setState(() {
-      conversationMessages.remove(key);
-      if (selectedConversation >= conversations.length) {
-        selectedConversation = conversations.length - 1;
+      conversationOrder.removeAt(index);
+      conversationMessages.remove(convToDelete.title);
+
+      if (conversationOrder.isEmpty) {
+        _createInitialConversation();
+      } else if (selectedConversation >= conversationOrder.length) {
+        selectedConversation = conversationOrder.length - 1;
       }
     });
   }
@@ -354,13 +348,13 @@ class _ChatScreenState extends State<ChatScreen>
         child: ListView.builder(
           itemCount: conversations.length,
           itemBuilder: (context, index) {
-            final isSelected = index == selectedConversation;
-            final conversationName = conversations[index];
+            final isSelected = index == selectedConversationIndex;
+            final conversationName = conversationOrder[index].title;
 
             return GestureDetector(
               onTap: () {
                 setState(() {
-                  selectedConversation = index;
+                  selectedConversationIndex = index;
                 });
               },
               child: Container(
@@ -406,11 +400,11 @@ class _ChatScreenState extends State<ChatScreen>
 
 
   List<ChatMessage> get currentMessages {
-  if (conversationMessages.isEmpty) return [];
-
-  final key = conversations[selectedConversation];
-  return conversationMessages[key] ?? [];
+  if (conversationOrder.isEmpty) return [];
+  final convId = conversationOrder[selectedConversationIndex].id;
+  return conversationMessages[convId] ?? [];
 }
+
 
   @override
   void dispose() {
